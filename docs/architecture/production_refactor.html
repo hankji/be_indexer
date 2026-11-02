@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>be_indexer 生产级重构方案</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --panel-2: #eef4ff;
+      --line: #dfe7f3;
+      --text: #1d2736;
+      --muted: #5f6f86;
+      --accent: #1a73e8;
+      --accent-2: #0d9488;
+      --warning: #d97706;
+      --danger: #b42318;
+      --shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 32px 20px 80px;
+    }
+    h1, h2, h3 {
+      line-height: 1.3;
+      margin-top: 0;
+    }
+    h1 {
+      font-size: 2.1rem;
+      margin-bottom: 14px;
+    }
+    h2 {
+      font-size: 1.5rem;
+      margin: 40px 0 16px;
+      border-bottom: 2px solid var(--line);
+      padding-bottom: 8px;
+    }
+    h3 {
+      font-size: 1.12rem;
+      margin: 24px 0 10px;
+    }
+    p, li {
+      color: var(--text);
+      font-size: 15px;
+    }
+    code {
+      background: #eef2ff;
+      border: 1px solid #dfe7ff;
+      border-radius: 6px;
+      padding: 2px 8px;
+      font-size: 0.92em;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      padding: 20px 22px;
+      margin: 18px 0;
+    }
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin: 24px 0;
+    }
+    .kpi {
+      background: linear-gradient(180deg, #ffffff, #f3f8ff);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 18px 16px;
+    }
+    .kpi .label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 6px;
+    }
+    .kpi .value {
+      font-size: 1.7rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .table-wrap {
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+      font-size: 14px;
+    }
+    th {
+      background: #f7faff;
+      color: var(--text);
+      font-weight: 700;
+    }
+    .diagram {
+      background: linear-gradient(180deg, #fff, #f5f9ff);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 18px 14px;
+      overflow-x: auto;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      white-space: pre;
+    }
+    .badge {
+      display: inline-block;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: var(--panel-2);
+      color: var(--accent);
+      border: 1px solid #d7e9ff;
+      font-size: 12px;
+      font-weight: 600;
+      margin-right: 8px;
+      margin-bottom: 8px;
+    }
+    ul, ol {
+      padding-left: 20px;
+    }
+    .warning {
+      border-left: 4px solid var(--warning);
+      padding-left: 12px;
+      color: #7a4a00;
+      background: #fff8eb;
+      border-radius: 8px;
+      padding-top: 8px;
+      padding-bottom: 8px;
+    }
+    .danger {
+      border-left: 4px solid var(--danger);
+      background: #fff2f0;
+      color: #8e241a;
+      padding-left: 12px;
+      border-radius: 8px;
+      padding-top: 8px;
+      padding-bottom: 8px;
+    }
+    .small {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    @media (max-width: 640px) {
+      .container { padding: 16px 14px 60px; }
+      h1 { font-size: 1.7rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>be_indexer 生产级重构方案</h1>
+    <div class="small">适用于：广告投放 / 规则匹配 / 布尔表达式检索引擎的 Google / Yahoo 级生产环境</div>
+
+    <div class="kpis">
+      <div class="kpi">
+        <span class="label">目标场景</span>
+        <div class="value">Predicate</div>
+      </div>
+      <div class="kpi">
+        <span class="label">核心职责</span>
+        <div class="value">Match</div>
+      </div>
+      <div class="kpi">
+        <span class="label">不含模块</span>
+        <div class="value">Ranking</div>
+      </div>
+      <div class="kpi">
+        <span class="label">工程目标</span>
+        <div class="value">Production</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>1. 文档定位</h2>
+      <p>
+        这个仓库不是完整的广告投放引擎，而是“条件匹配核心（Predicate Match Core）”。它的价值在于：将规则表达式和用户特征映射到候选文档集合。它适合做广告定向过滤、规则匹配、商品筛选等阶段，但不负责排序、竞价、预算和频次控制。
+      </p>
+      <p>
+        当前仓库的关键模块已经体现了合理的核心设计，如：<code>Document</code>、<code>Conjunction</code>、<code>BoolValues</code>、<code>EntriesHolder</code>、<code>IndexerBuilder</code>、<code>KGroupsBEIndex</code>。但如果要达到 Google/Yahoo 级生产环境，需要把它从“算法原型/单机库”升级成“生产级 predicate engine”。
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>2. 当前代码对应关系</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>文件</th>
+            <th>当前职责</th>
+            <th>生产级重构重点</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>be_indexer.go</code></td>
+            <td>索引接口定义和查询入口</td>
+            <td>扩展 <code>BEIndex</code> 以支持版本、快照、metrics、reader handle</td>
+          </tr>
+          <tr>
+            <td><code>index_builder.go</code></td>
+            <td>文档构建、缓存、字段配置</td>
+            <td>拆出 schema registry、segment compiler、version manager</td>
+          </tr>
+          <tr>
+            <td><code>be_indexer_kgroups.go</code></td>
+            <td>按 k-group 执行查询匹配</td>
+            <td>增加 query planner、cost-based field ordering、early exit</td>
+          </tr>
+          <tr>
+            <td><code>entries_holder.go</code></td>
+            <td>posting list / field holder</td>
+            <td>从对象型 map 收敛为 compressed posting list / bitmap store / segment store</td>
+          </tr>
+          <tr>
+            <td><code>doc_idx_cache.go</code></td>
+            <td>文档级增量缓存</td>
+            <td>升级为 schema-version + segment-version + snapshot-aware cache</td>
+          </tr>
+          <tr>
+            <td><code>roaringidx/</code></td>
+            <td>Roaring bitmap 路线</td>
+            <td>作为高压缩实现的主路径之一，适合生产缓存和候选 filtering</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>3. 当前性能瓶颈分析</h2>
+
+      <h3>3.1 结构层面：内存对象型 posting list</h3>
+      <p>
+        当前默认 holder 以 <code>map[Term]Entries</code> 为核心，例如 <code>DefaultEntriesHolder</code> 在 <code>entries_holder.go</code> 中使用对象型存储。这个设计容易造成：
+      </p>
+      <ul>
+        <li>大量小对象分配</li>
+        <li>map + slice 造成 GC 压力</li>
+        <li>posting list 扩容带来内存碎片</li>
+        <li>大规模文档下热点字段的内存占用明显增加</li>
+      </ul>
+      <p class="warning">
+        生产级广告系统的常见做法不是追求“泛型对象存储”，而是追求“压缩中的高性能 + 低碎片 + 低 GC”。
+      </p>
+
+      <h3>3.2 查询层面：缺少 Cost-based Query Planner</h3>
+      <p>
+        在 <code>KGroupsBEIndex.retrieveK</code> 中，查询路径主要做游标排序和归并。算法逻辑正确，但没有按照字段 selectivity 选择执行顺序，也没有对高基数字段做更高效的 range / bitmap 分支处理。
+      </p>
+      <p>
+        这意味着：
+      </p>
+      <ul>
+        <li>字段顺序不是按候选规模优化</li>
+        <li>高基数字段容易拖慢查询</li>
+        <li>exclude / multi-value / range 条件的处理不够有成本意识</li>
+      </ul>
+
+      <h3>3.3 构建层面：缺失 segment / snapshot / versioning</h3>
+      <p>
+        现在的增量缓存是 doc-level 的，但真正大规模生产环境中，索引更关注：segment build + versioned snapshot + compaction。当前架构过于“单机内存增量缓存”，缺少版本化索引管理。
+      </p>
+
+      <h3>3.4 运维层面：缺少 metrics + SLO + workload isolation</h3>
+      <p>
+        生产环境需要 p99/p999、heap profile、GC pause、slow query logging、snapshot health check、index corruption detection 等能力。这些在该仓库中尚不完整。
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>4. 目标架构：生产级 predicate engine</h2>
+      <div class="diagram">+---------------------------------------------------------------+
+|                    广告后台 / 规则匹配系统                       |
++---------------------------------------------------------------+
+        |
+        v
++---------------------------------------------------------------+
+|  1. Rule Ingestion + Normalizer                                |
+|  - 广告定向规则                                                  |
+|  - 用户特征归一化                                                |
+|  - schema validation                                            |
++---------------------------------------------------------------+
+        |
+        v
++---------------------------------------------------------------+
+|  2. Predicate Index Builder                                     |
+|  - Document / Conjunction / BoolValues                          |
+|  - schema registry                                              |
+|  - segment compiler                                             |
+|  - versioned snapshot                                           |
++---------------------------------------------------------------+
+        |
+        v
++---------------------------------------------------------------+
+|  3. Query Planner                                              |
+|  - estimate field selectivity                                   |
+|  - choose minimal posting list                                  |
+|  - bitmap / posting intersection                               |
+|  - range + equality + exclude management                       |
++---------------------------------------------------------------+
+        |
+        v
++---------------------------------------------------------------+
+|  4. Candidate Generator                                        |
+|  - doc id list                                                  |
+|  - filtered candidate set                                       |
++---------------------------------------------------------------+
+        |
+        v
++---------------------------------------------------------------+
+|  5. Ranking / Auction / Budget                                  |
+|  - CTR/CVR estimator                                             |
+|  - budget / pacing                                              |
+|  - frequency cap                                               |
++---------------------------------------------------------------+
+        |
+        v
++---------------------------------------------------------------+
+|  6. Metrics / SLO / Canary / Rollback                           |
+|  - p50/p99/p999                                                 |
+|  - GC/heap monitoring                                            |
+|  - segment health check                                          |
++---------------------------------------------------------------+</div>
+    </div>
+
+    <div class="card">
+      <h2>5. 模块化重构方案</h2>
+
+      <h3>5.1 Predicate Matching Core</h3>
+      <p><strong>目标：</strong> 把当前的 <code>KGroupsBEIndex</code> 从“通用匹配器”升级成“生产级查询执行器”。</p>
+      <ul>
+        <li>保留核心表达式语义：<code>Document</code> / <code>Conjunction</code> / <code>BoolValues</code></li>
+        <li>新增 planner：按字段选择性决定查询执行顺序</li>
+        <li>新增 candidate set pipeline</li>
+        <li>新增 metrics / stats collector</li>
+      </ul>
+
+      <h3>5.2 Storage Layer</h3>
+      <p>将 <code>DefaultEntriesHolder</code> 改成可压缩 posting store：</p>
+      <ul>
+        <li><code>CompressedPostingList</code></li>
+        <li><code>RoaringBitmapPostingList</code></li>
+        <li><code>RangePostingList</code></li>
+        <li><code>StringDictionary</code></li>
+      </ul>
+      <p>核心要求：低内存、低碎片、高读吞吐、适合多线程查询。</p>
+
+      <h3>5.3 Segment & Snapshot</h3>
+      <p>把 doc-level cache 升级为 segment-aware cache：</p>
+      <ul>
+        <li><code>SegmentID</code></li>
+        <li><code>SchemaVersion</code></li>
+        <li><code>SnapshotVersion</code></li>
+        <li><code>CompactionVersion</code></li>
+      </ul>
+      <p>要求：只允许读取已发布快照，避免 stale index。</p>
+
+      <h3>5.4 Query Runtime</h3>
+      <p>新增以下组件：</p>
+      <ul>
+        <li><code>QueryPlanner</code></li>
+        <li><code>FieldSelector</code></li>
+        <li><code>CandidateSetBuilder</code></li>
+        <li><code>RuntimeReader</code></li>
+        <li><code>ShardRouter</code></li>
+      </ul>
+      <p>让查询在读多写少的情况下使用 immutable snapshot 和 shard-safe access。</p>
+    </div>
+
+    <div class="card">
+      <h2>6. 代码级重构清单</h2>
+
+      <h3>6.1 <code>be_indexer.go</code></h3>
+      <p>增加生产环境接口封装：</p>
+      <pre><code>type IndexStats struct {
+    Version        uint64
+    FieldCount     int
+    PostingCount   int
+    CandidateQPS   float64
+    AvgLatencyMS   float64
+}
+
+type BEIndex interface {
+    Retrieve(...)
+    RetrieveWithCollector(...)
+    GetStats() IndexStats
+    GetSnapshotVersion() uint64
+    AcquireReader() ReaderHandle
+}</code></pre>
+
+      <h3>6.2 <code>be_indexer_kgroups.go</code></h3>
+      <p>重点改造：处理 query planner、early exit 和候选构造。</p>
+      <ul>
+        <li>旧：<code>retrieveK</code> 直接遍历 field cursors + sort</li>
+        <li>新：<code>executeQueryPlan(plan)</code></li>
+        <li>新增：<code>selectFieldsByCost(assigns)</code></li>
+        <li>新增：<code>canEarlyExit(candidateSet, threshold)</code></li>
+      </ul>
+
+      <h3>6.3 <code>entries_holder.go</code></h3>
+      <p>核心改造方向：</p>
+      <ul>
+        <li>旧：<code>map[Term]Entries</code></li>
+        <li>新：<code>PostingStore</code> + <code>TermDictionary</code> + <code>CompressedPostingList</code></li>
+        <li>新增字段统计：<code>CardinalityHint</code>、<code>AvgPostingSize</code>、<code>Selectivity</code></li>
+      </ul>
+
+      <h3>6.4 <code>index_builder.go</code></h3>
+      <p>重构为 pipeline：</p>
+      <ul>
+        <li><code>SchemaRegistry</code></li>
+        <li><code>SegmentBuilder</code></li>
+        <li><code>Compactor</code></li>
+        <li><code>SnapshotPublisher</code></li>
+      </ul>
+      <p>确保构建过程可被版本化、可回滚和可灰度发布。</p>
+
+      <h3>6.5 <code>doc_idx_cache.go</code></h3>
+      <p>升级缓存模型：</p>
+      <pre><code>type SegmentCacheKey struct {
+    SegmentID     string
+    SchemaVersion uint64
+    BuildVersion  uint64
+}
+
+type SnapshotCache struct {
+    SegmentID     string
+    SchemaVersion uint64
+    BuildVersion  uint64
+    Data          []byte
+}</code></pre>
+      <p>不再只看 doc id + version，而要考虑 segment 和 schema 版本。</p>
+    </div>
+
+    <div class="card">
+      <h2>7. 生产级性能目标</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>维度</th>
+            <th>目标</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>查询 p50</td>
+            <td>&lt; 1 ms</td>
+            <td>热点字段 / 热点匹配</td>
+          </tr>
+          <tr>
+            <td>查询 p99</td>
+            <td>&lt; 10 ms</td>
+            <td>平常在线流量</td>
+          </tr>
+          <tr>
+            <td>查询 p999</td>
+            <td>&lt; 50 ms</td>
+            <td>峰值尖峰场景</td>
+          </tr>
+          <tr>
+            <td>索引构建</td>
+            <td>高并发分段构建</td>
+            <td>多核心流式 build</td>
+          </tr>
+          <tr>
+            <td>GC</td>
+            <td>稳定、低抖动</td>
+            <td>避免 map/slice 造成大量 GC</td>
+          </tr>
+          <tr>
+            <td>版本发布</td>
+            <td>无 stale read</td>
+            <td>snapshot + segment version</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>8. 重构路线图</h2>
+      <ol>
+        <li><strong>Phase 1：稳定匹配核心</strong>
+          <ul>
+            <li>引入 query planner</li>
+            <li>完善 metrics 和 stats</li>
+            <li>让读取和构建都能观察性能</li>
+          </ul>
+        </li>
+        <li><strong>Phase 2：压缩与内存优化</strong>
+          <ul>
+            <li>改造 default store</li>
+            <li>采用 compressed postings</li>
+            <li>添加 bitmap / range store</li>
+          </ul>
+        </li>
+        <li><strong>Phase 3：版本和快照管理</strong>
+          <ul>
+            <li>segment publish</li>
+            <li>snapshot rollback</li>
+            <li>schema evolution</li>
+          </ul>
+        </li>
+        <li><strong>Phase 4：工业级运行</strong>
+          <ul>
+            <li>多线程读取</li>
+            <li>shard / partition</li>
+            <li>canary + monitoring</li>
+          </ul>
+        </li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h2>9. 关键结论</h2>
+      <p>
+        当前仓库最核心的价值在于：<strong>把布尔表达式匹配做成了可复用的、可扩展的核心引擎。</strong> 它已经具备研究型和工程型基础，但如果要跑到 Google / Yahoo 这样的生产环境，必须从“算法库”升级到“生产级 predicate engine”。
+      </p>
+      <p class="danger">
+        不要继续在单机 map + slice 结构上无限扩张，而要把它演化为：segment-based、compressed、versioned、query-planned、metric-driven 的匹配引擎。
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>10. 建议的下一步</h2>
+      <ol>
+        <li>先把这份文档放入仓库 docs 目录</li>
+        <li>在 <code>refactor/google-scale-predicate-engine</code> 分支中，开始 Phase 1 的代码整理</li>
+        <li>新增 <code>QueryPlanner</code>、<code>IndexStats</code>、<code>SegmentInfo</code> 等接口</li>
+        <li>先实现一轮 benchmark harness，再针对热点指标做优化</li>
+      </ol>
+    </div>
+  </div>
+</body>
+</html>
