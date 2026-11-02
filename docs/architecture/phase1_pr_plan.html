@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Phase 1 PR Ready Plan</title>
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.7; max-width: 1100px; margin: 0 auto; padding: 32px 20px 80px; color: #1f2937; background: #f8fafc; }
+    h1,h2,h3 { color: #111827; }
+    .card { background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px 24px; margin-bottom: 18px; box-shadow: 0 2px 10px rgba(0,0,0,0.02); }
+    code { background: #eef2ff; padding: 2px 6px; border-radius: 6px; }
+    pre { background: #111827; color: #e5e7eb; padding: 14px; border-radius: 8px; overflow-x: auto; }
+    ul, ol { padding-left: 24px; }
+  </style>
+</head>
+<body>
+  <h1>Phase 1 PR Ready Plan</h1>
+
+  <div class="card">
+    <h2>Goal</h2>
+    <p>
+      This Phase 1 change introduces production-oriented runtime primitives without breaking the public <code>BEIndex</code> API. The objective is to prepare the predicate-matching engine for future segment-based, compressed, and planner-driven optimizations.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Scope</h2>
+    <ul>
+      <li>query planning metadata</li>
+      <li>runtime stats and snapshot awareness</li>
+      <li>retrieval compatibility layer for production execution planning</li>
+      <li>benchmark scaffolding for hot-path validation</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Included changes</h2>
+    <h3>1. Query planner abstraction</h3>
+    <p>A new <code>QueryPlanner</code> abstraction and <code>DefaultQueryPlanner</code> have been introduced in <code>phase1_runtime.go</code>.</p>
+    <ul>
+      <li>estimate per-field selectivity</li>
+      <li>choose a cost-aware field evaluation order</li>
+      <li>expose a clean extension point for future optimization</li>
+    </ul>
+
+    <h3>2. Runtime metrics and snapshot metadata</h3>
+    <p>Added optional runtime interfaces:</p>
+    <ul>
+      <li><code>IndexStats</code></li>
+      <li><code>QueryMetrics</code></li>
+      <li><code>RuntimeStats</code></li>
+      <li><code>ReaderHandle</code></li>
+      <li><code>SliceProvider</code> (conceptual, future expansion)</li>
+      <li><code>SnapshotProvider</code></li>
+      <li><code>SegmentInfo</code></li>
+    </ul>
+
+    <h3>3. Retrieval compatibility hook</h3>
+    <p>A planner-aware retrieval hook has been added in <code>planner_runtime_integration.go</code>.</p>
+    <ul>
+      <li>maintains compatibility with legacy `Retrieve` callers</li>
+      <li>allows field evaluation to be ordered around cost heuristics</li>
+      <li>creates a path to future planner-driven execution</li>
+    </ul>
+
+    <h3>4. Benchmark scaffolding</h3>
+    <p>The benchmark harness under <code>benchmark/</code> is designed to measure:</p>
+    <ul>
+      <li>planner cost ordering overhead</li>
+      <li>retrieval hot-path behavior under boolean conditions</li>
+      <li>allocation pressure before deeper storage-layer optimization</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Why this is Phase 1</h2>
+    <p>
+      This is intentionally a low-risk, non-breaking preparation step. The aim is to make the matcher runtime production-aware without rewriting the core algorithm prematurely.
+    </p>
+    <p>Next phases are expected to be:</p>
+    <ol>
+      <li>replace default map-based postings with compressed stores</li>
+      <li>add segment snapshot and schema-aware versioning</li>
+      <li>introduce cost-based query execution</li>
+      <li>add multi-threaded or sharded read paths</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>Risk control</h2>
+    <ul>
+      <li>old APIs remain valid</li>
+      <li>benchmark and planner code are additive</li>
+      <li>no index serialization format is changed yet</li>
+      <li>no segment rewrite or breaking storage migration is introduced in this phase</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Validation strategy</h2>
+    <pre>go test ./...
+go test ./... -run TestBEIndex_Retrieve
+# benchmark visibility
+# go test ./benchmark/... -bench . -benchmem</pre>
+  </div>
+
+  <div class="card">
+    <h2>Status</h2>
+    <p>
+      Phase 1 is intentionally scaffolding-focused. It is designed to prepare the codebase for later production optimizations while preserving current correctness and behavior.
+    </p>
+  </div>
+</body>
+</html>
