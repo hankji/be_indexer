@@ -44,9 +44,7 @@ func (c *EntriesContainer) getFieldHolder(desc *FieldDesc) EntriesHolder {
 	return c.fieldHolder[desc.Field]
 }
 
-func (c *EntriesContainer) GetHolder(desc *FieldDesc) EntriesHolder {
-	return c.getFieldHolder(desc)
-}
+func (c *EntriesContainer) GetHolder(desc *FieldDesc) EntriesHolder { return c.getFieldHolder(desc) }
 
 func (c *EntriesContainer) CreateHolder(desc *FieldDesc) EntriesHolder {
 	if holder := c.GetHolder(desc); holder != nil {
@@ -111,18 +109,20 @@ func (bi *KGroupsBEIndex) getKSizeEntries(k int) *EntriesContainer {
 	return bi.kSizeContainers[k]
 }
 
+// initCursors retains the legacy internal entry point. Query retrieval that has
+// already built a plan should call initCursorsWithOrder to avoid replanning for
+// each K-group.
 func (bi *KGroupsBEIndex) initCursors(ctx *retrieveContext, k int) (FieldCursors, error) {
+	return bi.initCursorsWithOrder(ctx, k, buildExecutionPlan(ctx.assigns).orderedFields)
+}
+
+func (bi *KGroupsBEIndex) initCursorsWithOrder(ctx *retrieveContext, k int, orderedFields []BEField) (FieldCursors, error) {
 	fCursors := make(FieldCursors, 0, len(bi.fieldsData))
 	if k == 0 && len(bi.wildcardEntries) > 0 {
 		fCursors = append(fCursors, NewFieldCursor(NewEntriesCursor(wildcardQKey, bi.wildcardEntries)))
 	}
 	kSizeContainer := bi.getKSizeEntries(k)
-	plan := buildExecutionPlan(ctx.assigns)
-	orderedFields := plan.orderedFields
-	if len(orderedFields) == 0 {
-		orderedFields = orderedAssignmentFields(ctx.assigns, QueryPlan{})
-	}
-	for _, field := range orderedFields {
+	for _, field := range orderedAssignmentFields(ctx.assigns, QueryPlan{Fields: orderedFields}) {
 		values := ctx.assigns[field]
 		desc, ok := bi.fieldsData[field]
 		if !ok {
@@ -201,11 +201,8 @@ func (bi *KGroupsBEIndex) RetrieveWithCollector(queries Assignments, collector R
 	util.PanicIf(ctx.collector != nil, "can't specify collector twice")
 	ctx.collector = collector
 	plan := buildExecutionPlan(queries)
-	if len(plan.orderedFields) > 0 {
-		ctx.assigns = orderedAssignments(queries, plan)
-	}
 	for k := util.MinInt(queries.Size(), bi.maxK()); k >= 0; k-- {
-		fCursors, err := bi.initCursors(&ctx, k)
+		fCursors, err := bi.initCursorsWithOrder(&ctx, k, plan.orderedFields)
 		if err != nil {
 			return err
 		}
