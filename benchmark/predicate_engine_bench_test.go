@@ -1,10 +1,10 @@
 package be_indexer_test
 
 import (
-	_ "github.com/echoface/be_indexer/holder/rangeholder"
 	"testing"
 
 	"github.com/echoface/be_indexer"
+	_ "github.com/echoface/be_indexer/holder/rangeholder"
 )
 
 func BenchmarkQueryPlannerPlan(b *testing.B) {
@@ -35,6 +35,7 @@ func BenchmarkQueryPlannerPlan(b *testing.B) {
 	}
 
 	b.ReportAllocs()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = planner.Plan(assigns)
 	}
@@ -65,6 +66,7 @@ func BenchmarkKGroupsBEIndexRetrieve(b *testing.B) {
 	}
 
 	b.ReportAllocs()
+	b.ResetTimer() // Exclude index construction and query setup from retrieval timings.
 	for i := 0; i < b.N; i++ {
 		if _, err := indexer.Retrieve(queries); err != nil {
 			b.Fatal(err)
