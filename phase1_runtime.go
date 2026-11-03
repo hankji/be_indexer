@@ -6,31 +6,42 @@ import (
 	"github.com/echoface/be_indexer/util"
 )
 
-// QueryFieldStat contains metadata used to estimate the cost of evaluating a
-// query field. Selectivity must be in (0, 1]; lower values are more selective.
+// QueryFieldStat defines a field-specific planning hint for the cost-based
+// query planner. These values are intentionally lightweight so they can be
+// computed from metadata without touching the full postings during the hot path.
 type QueryFieldStat struct {
-	Field                BEField
-	Cardinality          uint64
+	Field BEField
+
+	// Cardinality is an approximate number of distinct values stored in this field.
+	Cardinality uint64
+
+	// EstimatedSelectivity is a normalized value in [0, 1]. Smaller values mean
+	// more selective fields, which should be evaluated earlier.
 	EstimatedSelectivity float64
-	PostingCount         uint64
-	IsRange              bool
-	Weight               float64
+
+	// PostingCount is the approximate number of posting list entries for this field.
+	PostingCount uint64
+
+	// IsRange marks whether the query uses range semantics on the field.
+	IsRange bool
+
+	// Weight is a planner weight used to prioritize earlier filtering.
+	Weight float64
 }
 
-// QueryPlan describes a heuristic ordering of fields for a query.
+// QueryPlan describes the ordered field execution strategy for a query.
 type QueryPlan struct {
 	Fields   []BEField
 	Selected []QueryFieldStat
 }
 
-// QueryPlanner chooses an evaluation order for query fields.
+// QueryPlanner chooses the execution order of fields during retrieval. This is a
+// small production-oriented abstraction that does not break existing callers.
 type QueryPlanner interface {
 	Plan(assigns Assignments) QueryPlan
 }
 
-// DefaultQueryPlanner orders fields by estimated selectivity. Without registered
-// statistics it falls back to deterministic field-name ordering; it does not claim
-// to estimate real posting-list costs in that case.
+// DefaultQueryPlanner orders fields by estimated selectivity.
 type DefaultQueryPlanner struct {
 	fieldStats map[BEField]QueryFieldStat
 }
@@ -39,7 +50,6 @@ func NewDefaultQueryPlanner() *DefaultQueryPlanner {
 	return &DefaultQueryPlanner{fieldStats: make(map[BEField]QueryFieldStat)}
 }
 
-// RegisterFieldStat adds or replaces a planning hint for a field.
 func (p *DefaultQueryPlanner) RegisterFieldStat(stat QueryFieldStat) {
 	if p.fieldStats == nil {
 		p.fieldStats = make(map[BEField]QueryFieldStat)
@@ -82,7 +92,7 @@ func (p *DefaultQueryPlanner) Plan(assigns Assignments) QueryPlan {
 	return plan
 }
 
-// IndexStats contains a point-in-time summary of an index runtime.
+// IndexStats are production-oriented runtime metrics for a predicate engine.
 type IndexStats struct {
 	Version        uint64
 	DocCount       uint64
@@ -95,6 +105,7 @@ type IndexStats struct {
 	SegmentVersion uint64
 }
 
+// QueryMetrics records snapshot-style metrics for query execution.
 type QueryMetrics struct {
 	TotalQueries  uint64
 	AvgLatencyMS  float64
@@ -102,11 +113,13 @@ type QueryMetrics struct {
 	FailedQueries uint64
 }
 
+// RuntimeStats is a general runtime aggregation for a predicate engine.
 type RuntimeStats struct {
 	IndexStats IndexStats
 	Query      QueryMetrics
 }
 
+// ReaderHandle is an abstraction for a snapshot-aware reader.
 type ReaderHandle interface {
 	Close() error
 	SnapshotVersion() uint64
@@ -124,7 +137,7 @@ type ReaderProvider interface {
 	AcquireReader() ReaderHandle
 }
 
-// SegmentInfo is metadata for a published immutable index segment.
+// SegmentInfo is a lightweight description of an immutable segment.
 type SegmentInfo struct {
 	ID            string
 	SchemaVersion uint64
