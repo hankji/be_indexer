@@ -1,6 +1,7 @@
 package be_indexer
 
 import (
+	"container/heap"
 	"fmt"
 	"sort"
 	"strings"
@@ -9,12 +10,9 @@ import (
 )
 
 type (
-	// EntriesContainer for default Entries Holder, it can hold different field's entries,
-	// but for ACMatcher or other Holder, it may only hold entries for one field
 	EntriesContainer struct {
-		defaultHolder EntriesHolder // shared entries holder
-
-		fieldHolder map[BEField]EntriesHolder // special field holder
+		defaultHolder EntriesHolder
+		fieldHolder   map[BEField]EntriesHolder
 	}
 
 	KGroupsBEIndex struct {
@@ -24,17 +22,13 @@ type (
 )
 
 func newFieldEntriesContainer() *EntriesContainer {
-	return &EntriesContainer{
-		defaultHolder: NewEntriesHolder(HolderNameDefault),
-		fieldHolder:   map[BEField]EntriesHolder{},
-	}
+	return &EntriesContainer{defaultHolder: NewEntriesHolder(HolderNameDefault), fieldHolder: map[BEField]EntriesHolder{}}
 }
 
 func (c *EntriesContainer) compileEntries() (err error) {
 	if err = c.defaultHolder.CompileEntries(); err != nil {
 		return err
 	}
-
 	for _, holder := range c.fieldHolder {
 		if err = holder.CompileEntries(); err != nil {
 			return err
@@ -47,33 +41,20 @@ func (c *EntriesContainer) getFieldHolder(desc *FieldDesc) EntriesHolder {
 	if desc.Container == HolderNameDefault {
 		return c.defaultHolder
 	}
-	if holder, ok := c.fieldHolder[desc.Field]; ok {
-		return holder
-	}
-	return nil
+	return c.fieldHolder[desc.Field]
 }
 
 func (c *EntriesContainer) GetHolder(desc *FieldDesc) EntriesHolder {
-	if desc.Container == HolderNameDefault {
-		return c.defaultHolder
-	}
-	if holder, ok := c.fieldHolder[desc.Field]; ok {
-		return holder
-	}
-	return nil
+	return c.getFieldHolder(desc)
 }
 
 func (c *EntriesContainer) CreateHolder(desc *FieldDesc) EntriesHolder {
-	holder := c.GetHolder(desc)
-	if holder != nil { // already has holder for field
+	if holder := c.GetHolder(desc); holder != nil {
 		return holder
 	}
-	hasBuilder := HasHolderBuilder(desc.Container)
-	util.PanicIf(!hasBuilder, "field:%s container:%s not found, plz register it", desc.Field, desc.Container)
-
-	holder = NewEntriesHolder(desc.Container)
+	util.PanicIf(!HasHolderBuilder(desc.Container), "field:%s container:%s not found, plz register it", desc.Field, desc.Container)
+	holder := NewEntriesHolder(desc.Container)
 	c.fieldHolder[desc.Field] = holder
-
 	return holder
 }
 
@@ -85,12 +66,6 @@ func (c *EntriesContainer) DumpEntries(buf *strings.Builder) {
 	}
 }
 
-// DumpInfo
-// default holder: {name:%s value_count:%d, max_entries:%d avg_entries:%d}
-// field holder:
-//
-//	>field:%s {name: %s, value_count:%d max_entries:%d avg_entries:%d}
-//	>field:%s {name: %s, value_count:%d max_entries:%d avg_entries:%d}
 func (c *EntriesContainer) DumpInfo(buf *strings.Builder) {
 	buf.WriteString("holder information:")
 	c.defaultHolder.DumpInfo(buf)
@@ -102,24 +77,17 @@ func (c *EntriesContainer) DumpInfo(buf *strings.Builder) {
 }
 
 func NewKGroupsBEIndex() BEIndex {
-	index := &KGroupsBEIndex{
-		indexBase: indexBase{
-			fieldsData: make(map[BEField]*FieldDesc),
-		},
+	return &KGroupsBEIndex{
+		indexBase:       indexBase{fieldsData: make(map[BEField]*FieldDesc)},
 		kSizeContainers: make([]*EntriesContainer, 0),
 	}
-	return index
 }
 
-func (bi *KGroupsBEIndex) maxK() int {
-	return len(bi.kSizeContainers) - 1
-}
+func (bi *KGroupsBEIndex) maxK() int { return len(bi.kSizeContainers) - 1 }
 
-// newContainer(k int) *EntriesContainer get a container if created, otherwise create one
 func (bi *KGroupsBEIndex) newContainer(k int) *EntriesContainer {
 	for k >= len(bi.kSizeContainers) {
-		container := newFieldEntriesContainer()
-		bi.kSizeContainers = append(bi.kSizeContainers, container)
+		bi.kSizeContainers = append(bi.kSizeContainers, newFieldEntriesContainer())
 	}
 	return bi.kSizeContainers[k]
 }
@@ -143,42 +111,32 @@ func (bi *KGroupsBEIndex) getKSizeEntries(k int) *EntriesContainer {
 	return bi.kSizeContainers[k]
 }
 
-func (bi *KGroupsBEIndex) initCursors(ctx *retrieveContext, k int) (fCursors FieldCursors, err error) {
-
-	fCursors = make(FieldCursors, 0, len(bi.fieldsData))
-
+func (bi *KGroupsBEIndex) initCursors(ctx *retrieveContext, k int) (FieldCursors, error) {
+	fCursors := make(FieldCursors, 0, len(bi.fieldsData))
 	if k == 0 && len(bi.wildcardEntries) > 0 {
-		pl := NewEntriesCursor(wildcardQKey, bi.wildcardEntries)
-		fCursors = append(fCursors, NewFieldCursor(pl))
+		fCursors = append(fCursors, NewFieldCursor(NewEntriesCursor(wildcardQKey, bi.wildcardEntries)))
 	}
-
 	kSizeContainer := bi.getKSizeEntries(k)
-
-	var entriesList EntriesCursors
-	var holder EntriesHolder
-
-	var ok bool
-	var desc *FieldDesc
-
-	for field, values := range ctx.assigns {
-
-		if desc, ok = bi.fieldsData[field]; !ok {
-			// not recognized field, no document care about this field, ignore
+	plan := buildExecutionPlan(ctx.assigns)
+	orderedFields := plan.orderedFields
+	if len(orderedFields) == 0 {
+		orderedFields = orderedAssignmentFields(ctx.assigns, QueryPlan{})
+	}
+	for _, field := range orderedFields {
+		values := ctx.assigns[field]
+		desc, ok := bi.fieldsData[field]
+		if !ok {
 			continue
 		}
-
-		if holder = kSizeContainer.getFieldHolder(desc); holder == nil {
-			// Logger.Debugf("entries holder not found, field:%s", desc.Field)
-			// case 1: user/client can pass non-exist assign, so just skip this field
-			// case 2: no any document has condition on this field
+		holder := kSizeContainer.getFieldHolder(desc)
+		if holder == nil {
 			continue
 		}
-
-		if entriesList, err = holder.GetEntries(desc, values); err != nil {
+		entriesList, err := holder.GetEntries(desc, values)
+		if err != nil {
 			Logger.Errorf("fetch entries from holder fail:%s, field:%s\n", err.Error(), desc.Field)
 			return nil, err
 		}
-
 		if len(entriesList) > 0 {
 			fCursors = append(fCursors, NewFieldCursor(entriesList...))
 			Logger.Debugf("<%s,%v> fetch %d posting list\n", desc.Field, values, len(entriesList))
@@ -189,15 +147,12 @@ func (bi *KGroupsBEIndex) initCursors(ctx *retrieveContext, k int) (fCursors Fie
 	return fCursors, nil
 }
 
-// retrieveK retrieve matched result from k size index data
 func (bi *KGroupsBEIndex) retrieveK(ctx *retrieveContext, fieldCursors FieldCursors, needMatchCnt int) {
 	if len(fieldCursors) < needMatchCnt {
 		LogInfoIf(ctx.dumpStepInfo, "need match:%d but only:%d", needMatchCnt, len(fieldCursors))
 		return
 	}
-	// sort.Sort(fieldCursors)
 	fieldCursors.Sort()
-
 	for !fieldCursors[needMatchCnt-1].GetCurEntryID().IsNULLEntry() {
 		if ctx.dumpStepInfo {
 			Logger.Infof("round need match:%d continue docs:%v", needMatchCnt, ctx.collector.GetDocIDs())
@@ -205,25 +160,16 @@ func (bi *KGroupsBEIndex) retrieveK(ctx *retrieveContext, fieldCursors FieldCurs
 		if ctx.dumpEntriesDetail {
 			Logger.Infof("round need match:%d continue entries\n%s", needMatchCnt, fieldCursors.Dump())
 		}
-
 		eid := fieldCursors[0].GetCurEntryID()
 		endEID := fieldCursors[needMatchCnt-1].GetCurEntryID()
-
 		conjID := eid.GetConjID()
 		endConjID := endEID.GetConjID()
-
-		nextID := NewEntryID(endConjID, false) // 逻辑按照conjID执行，但是直接使用endEID可能跳过排除逻辑的EID
-
+		nextID := NewEntryID(endConjID, false)
 		if conjID == endConjID {
-
-			// nextID = endEID + 1
 			nextID = NewEntryID(endEID.GetConjID(), true) + 1
-
 			if eid.IsInclude() {
-
 				ctx.collector.Add(conjID.DocID(), conjID)
-
-			} else { //exclude
+			} else {
 				for i := needMatchCnt; i < len(fieldCursors); i++ {
 					if fieldCursors[i].GetCurEntryID() < nextID {
 						fieldCursors[i].SkipTo(nextID)
@@ -231,66 +177,49 @@ func (bi *KGroupsBEIndex) retrieveK(ctx *retrieveContext, fieldCursors FieldCurs
 				}
 			}
 		}
-		for i := 0; i < needMatchCnt; i++ { // 推进游标
+		for i := 0; i < needMatchCnt; i++ {
 			fieldCursors[i].SkipTo(nextID)
 		}
-
 		fieldCursors.Sort()
-		// sort.Sort(fieldCursors)
 		if ctx.dumpStepInfo {
 			Logger.Infof("round end need match:%d, docs:%v", needMatchCnt, ctx.collector.GetDocIDs())
 		}
 	}
 }
 
-func (bi *KGroupsBEIndex) Retrieve(
-	queries Assignments, opts ...IndexOpt) (result DocIDList, err error) {
-
+func (bi *KGroupsBEIndex) Retrieve(queries Assignments, opts ...IndexOpt) (DocIDList, error) {
 	collector := PickCollector()
-
 	defer PutCollector(collector)
-
-	if err = bi.RetrieveWithCollector(queries, collector, opts...); err != nil {
+	if err := bi.RetrieveWithCollector(queries, collector, opts...); err != nil {
 		return nil, err
 	}
-
-	result = collector.GetDocIDs()
-
-	return result, nil
+	return collector.GetDocIDs(), nil
 }
 
-func (bi *KGroupsBEIndex) RetrieveWithCollector(
-	queries Assignments, collector ResultCollector, opts ...IndexOpt) (err error) {
-
+func (bi *KGroupsBEIndex) RetrieveWithCollector(queries Assignments, collector ResultCollector, opts ...IndexOpt) error {
 	ctx := newRetrieveCtx(queries, opts...)
 	util.PanicIf(ctx.collector != nil, "can't specify collector twice")
-
 	ctx.collector = collector
-
 	plan := buildExecutionPlan(queries)
 	if len(plan.orderedFields) > 0 {
 		ctx.assigns = orderedAssignments(queries, plan)
 	}
-
-	var fCursors FieldCursors
 	for k := util.MinInt(queries.Size(), bi.maxK()); k >= 0; k-- {
-		if fCursors, err = bi.initCursors(&ctx, k); err != nil {
+		fCursors, err := bi.initCursors(&ctx, k)
+		if err != nil {
 			return err
 		}
 		LogInfoIf(ctx.dumpStepInfo, "start@step:%d cursors:%d", k, len(fCursors))
 		if ctx.dumpEntriesDetail {
 			Logger.Infof("RetrieveWithCollector k:%d initial entries:\n%s", k, fCursors.Dump())
 		}
-
-		needMatchCnt := util.MaxInt(k, 1)
-		bi.retrieveK(&ctx, fCursors, needMatchCnt)
+		bi.retrieveK(&ctx, fCursors, util.MaxInt(k, 1))
 	}
 	return nil
 }
 
 func (bi *KGroupsBEIndex) DumpEntries(sb *strings.Builder) {
-	sb.WriteString("\n+++++++ size grouped boolean indexing entries +++++++++++ \n")
-	sb.WriteString(fmt.Sprintf(">>Z:\n"))
+	sb.WriteString("\n+++++++ size grouped boolean indexing entries +++++++++++ \n>>Z:\n")
 	sb.WriteString(wildcardQKey.String())
 	sb.WriteString(":")
 	sb.WriteString(fmt.Sprintf("%v", bi.wildcardEntries.DocString()))
@@ -314,61 +243,37 @@ func (bi *KGroupsBEIndex) DumpIndexInfo(sb *strings.Builder) {
 	sb.WriteString("++++++++++++ size grouped index info end ++++++++++++++++++\n")
 }
 
-// be_indexer_kgroups_optimized.go
-func (bi *KGroupsBEIndex) retrieveK_HeapOptimized(
-	ctx *retrieveContext,
-	fieldCursors FieldCursors,
-	needMatchCnt int) {
-
+// retrieveK_HeapOptimized is an experimental alternative. Keep it out of the
+// default retrieval path until equivalence tests and benchmarks justify enabling it.
+func (bi *KGroupsBEIndex) retrieveK_HeapOptimized(ctx *retrieveContext, fieldCursors FieldCursors, needMatchCnt int) {
 	if len(fieldCursors) < needMatchCnt {
 		LogInfoIf(ctx.dumpStepInfo, "need match:%d but only:%d", needMatchCnt, len(fieldCursors))
 		return
 	}
-
-	// ✅ 一次性初始化，O(m)
 	h := NewFieldCursorHeap(fieldCursors)
-
 	for len(h.cursors) >= needMatchCnt {
-
-		// ✅ O(1) 获取最小和第 needMatchCnt 个
 		minCursor := h.GetMin()
 		needCursor := h.GetNth(needMatchCnt - 1)
-
-		minEID := minCursor.GetCurEntryID()
-		needEID := needCursor.GetCurEntryID()
-
-		if ctx.dumpStepInfo {
-			Logger.Infof("round need match:%d continue docs:%v", needMatchCnt, ctx.collector.GetDocIDs())
-		}
-
-		conjID := minEID.GetConjID()
-		needConjID := needEID.GetConjID()
-
+		minEID, needEID := minCursor.GetCurEntryID(), needCursor.GetCurEntryID()
+		conjID, needConjID := minEID.GetConjID(), needEID.GetConjID()
 		nextID := NewEntryID(needConjID, false)
-
 		if conjID == needConjID {
 			nextID = NewEntryID(needConjID, true) + 1
-
 			if minEID.IsInclude() {
 				ctx.collector.Add(conjID.DocID(), conjID)
 			} else {
-				// Exclude 逻辑也要 Fix
 				for i := needMatchCnt; i < len(h.cursors); i++ {
 					if h.cursors[i].GetCurEntryID() < nextID {
 						h.cursors[i].SkipTo(nextID)
-						heap.Fix(h, i) // ✅ 堆化
+						heap.Fix(h, i)
 					}
 				}
 			}
 		}
-
-		// ✅ 推进所有 needMatchCnt 个游标
 		for i := 0; i < needMatchCnt; i++ {
 			h.cursors[i].SkipTo(nextID)
-			heap.Fix(h, i) // ✅ O(log m) 而不是 O(m²)
+			heap.Fix(h, i)
 		}
-
-		// 移除已结束的游标
 		for len(h.cursors) > 0 && h.cursors[0].ReachEnd() {
 			heap.Pop(h)
 		}
