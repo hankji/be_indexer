@@ -7,8 +7,8 @@ import (
 
 func TestOrderedAssignmentFieldsHonorsPlanAndRetainsUnplannedFields(t *testing.T) {
 	queries := Assignments{
-		"alpha":  NewStrValues("a"),
-		"bravo":  NewStrValues("b"),
+		"alpha":   NewStrValues("a"),
+		"bravo":   NewStrValues("b"),
 		"charlie": NewStrValues("c"),
 	}
 	plan := QueryPlan{Fields: []BEField{"bravo", "bravo", "unknown"}}
@@ -44,7 +44,7 @@ func TestOrderedAssignmentsPreservesEveryValue(t *testing.T) {
 	if len(got) != len(queries) {
 		t.Fatalf("orderedAssignments() returned %d fields, want %d", len(got), len(queries))
 	}
-	if got["alpha"] != alpha || got["bravo"] != bravo {
-		t.Fatalf("orderedAssignments() did not preserve original Values")
+	if !reflect.DeepEqual(got["alpha"], alpha) || !reflect.DeepEqual(got["bravo"], bravo) {
+		t.Fatalf("orderedAssignments() did not preserve original Values: got %#v, want alpha=%#v bravo=%#v", got, alpha, bravo)
 	}
 }
