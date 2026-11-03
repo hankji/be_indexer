@@ -1,6 +1,7 @@
 package be_indexer_test
 
 import (
+	_ "github.com/echoface/be_indexer/holder/rangeholder"
 	"testing"
 
 	"github.com/echoface/be_indexer"
@@ -43,7 +44,7 @@ func BenchmarkKGroupsBEIndexRetrieve(b *testing.B) {
 	builder := be_indexer.NewIndexerBuilder()
 	builder.ConfigField("city", be_indexer.FieldOption{Container: be_indexer.HolderNameDefault})
 	builder.ConfigField("device", be_indexer.FieldOption{Container: be_indexer.HolderNameDefault})
-	builder.ConfigField("age", be_indexer.FieldOption{Container: be_indexer.HolderNameDefault})
+	builder.ConfigField("age", be_indexer.FieldOption{Container: be_indexer.HolderNameExtendRange})
 
 	for i := 0; i < 2000; i++ {
 		doc := be_indexer.NewDocument(be_indexer.DocID(i))
