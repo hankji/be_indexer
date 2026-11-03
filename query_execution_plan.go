@@ -9,58 +9,46 @@ type queryExecutionPlan struct {
 	orderedFields []BEField
 }
 
+// orderedAssignmentFields honors the planner's field order, removes duplicates,
+// and appends any query fields omitted by the planner in deterministic order.
+// This ensures that an incomplete/custom plan never silently drops predicates.
 func orderedAssignmentFields(queries Assignments, plan QueryPlan) []BEField {
-	if len(plan.Fields) > 0 {
-		ordered := make([]BEField, 0, len(plan.Fields))
-		seen := make(map[BEField]struct{}, len(plan.Fields))
-		for _, field := range plan.Fields {
-			if _, ok := queries[field]; ok {
-				if _, exists := seen[field]; exists {
-					continue
-				}
-				seen[field] = struct{}{}
-				ordered = append(ordered, field)
-			}
+	ordered := make([]BEField, 0, len(queries))
+	seen := make(map[BEField]struct{}, len(queries))
+	for _, field := range plan.Fields {
+		if _, ok := queries[field]; !ok {
+			continue
 		}
-		if len(ordered) > 0 {
-			return ordered
+		if _, exists := seen[field]; exists {
+			continue
 		}
+		seen[field] = struct{}{}
+		ordered = append(ordered, field)
 	}
-	fields := make([]BEField, 0, len(queries))
+
+	missing := make([]BEField, 0, len(queries)-len(seen))
 	for field := range queries {
-		fields = append(fields, field)
+		if _, exists := seen[field]; !exists {
+			missing = append(missing, field)
+		}
 	}
-	sort.Slice(fields, func(i, j int) bool { return fields[i] < fields[j] })
-	return fields
+	sort.Slice(missing, func(i, j int) bool { return missing[i] < missing[j] })
+	return append(ordered, missing...)
 }
 
 // buildExecutionPlan computes a query execution order based on the planner.
 func buildExecutionPlan(queries Assignments) queryExecutionPlan {
-	planner := NewDefaultQueryPlanner()
-	plan := planner.Plan(queries)
-	if len(plan.Fields) == 0 {
-		return queryExecutionPlan{}
-	}
-	ordered := make([]BEField, 0, len(plan.Fields))
-	for _, field := range plan.Fields {
-		if _, ok := queries[field]; ok {
-			ordered = append(ordered, field)
-		}
-	}
-	return queryExecutionPlan{orderedFields: ordered}
+	plan := NewDefaultQueryPlanner().Plan(queries)
+	return queryExecutionPlan{orderedFields: orderedAssignmentFields(queries, plan)}
 }
 
-// orderedAssignments returns a new assignment map in planner-selected order while
-// preserving original values.
+// orderedAssignments returns a new assignment map with exactly the original
+// assignments. The map itself does not preserve iteration order; execution code
+// must use orderedFields directly when order matters.
 func orderedAssignments(queries Assignments, plan queryExecutionPlan) Assignments {
-	if len(plan.orderedFields) == 0 {
-		return queries
-	}
-	ordered := make(Assignments, len(plan.orderedFields))
-	for _, field := range plan.orderedFields {
-		if values, ok := queries[field]; ok {
-			ordered[field] = values
-		}
+	ordered := make(Assignments, len(queries))
+	for _, field := range orderedAssignmentFields(queries, QueryPlan{Fields: plan.orderedFields}) {
+		ordered[field] = queries[field]
 	}
 	return ordered
 }
