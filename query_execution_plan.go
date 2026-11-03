@@ -3,15 +3,14 @@ package be_indexer
 import "sort"
 
 // queryExecutionPlan is the concrete execution-order metadata for a retrieval
-// request. It is intentionally small and used as a compatibility layer before the
+// request. It is intentionally tiny and used as a compatibility layer before the
 // production planner evolves into a deeper query optimization engine.
 type queryExecutionPlan struct {
 	orderedFields []BEField
 }
 
 // orderedAssignmentFields honors the planner's field order, removes duplicates,
-// and appends any query fields omitted by the planner in deterministic order.
-// This ensures that an incomplete/custom plan never silently drops predicates.
+// and appends any remaining query fields in deterministic ascending order.
 func orderedAssignmentFields(queries Assignments, plan QueryPlan) []BEField {
 	ordered := make([]BEField, 0, len(queries))
 	seen := make(map[BEField]struct{}, len(queries))
@@ -42,13 +41,22 @@ func buildExecutionPlan(queries Assignments) queryExecutionPlan {
 	return queryExecutionPlan{orderedFields: orderedAssignmentFields(queries, plan)}
 }
 
-// orderedAssignments returns a new assignment map with exactly the original
-// assignments. The map itself does not preserve iteration order; execution code
-// must use orderedFields directly when order matters.
+// orderedAssignments returns a new assignment map in planner-selected order while
+// preserving the original values and ensuring every query field is included.
 func orderedAssignments(queries Assignments, plan queryExecutionPlan) Assignments {
-	ordered := make(Assignments, len(queries))
-	for _, field := range orderedAssignmentFields(queries, QueryPlan{Fields: plan.orderedFields}) {
-		ordered[field] = queries[field]
+	if len(plan.orderedFields) == 0 {
+		return queries
+	}
+	ordered := make(Assignments, len(plan.orderedFields))
+	for _, field := range plan.orderedFields {
+		if values, ok := queries[field]; ok {
+			ordered[field] = values
+		}
+	}
+	for field, values := range queries {
+		if _, exists := ordered[field]; !exists {
+			ordered[field] = values
+		}
 	}
 	return ordered
 }
