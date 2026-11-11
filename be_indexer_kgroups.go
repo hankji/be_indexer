@@ -144,7 +144,6 @@ func (bi *KGroupsBEIndex) getKSizeEntries(k int) *EntriesContainer {
 }
 
 func (bi *KGroupsBEIndex) initCursors(ctx *retrieveContext, k int) (fCursors FieldCursors, err error) {
-
 	fCursors = make(FieldCursors, 0, len(bi.fieldsData))
 
 	if k == 0 && len(bi.wildcardEntries) > 0 {
@@ -220,10 +219,8 @@ func (bi *KGroupsBEIndex) retrieveK(ctx *retrieveContext, fieldCursors FieldCurs
 			nextID = NewEntryID(endEID.GetConjID(), true) + 1
 
 			if eid.IsInclude() {
-
 				ctx.collector.Add(conjID.DocID(), conjID)
-
-			} else { //exclude
+			} else { // exclude
 				for i := needMatchCnt; i < len(fieldCursors); i++ {
 					if fieldCursors[i].GetCurEntryID() < nextID {
 						fieldCursors[i].SkipTo(nextID)
@@ -244,8 +241,8 @@ func (bi *KGroupsBEIndex) retrieveK(ctx *retrieveContext, fieldCursors FieldCurs
 }
 
 func (bi *KGroupsBEIndex) Retrieve(
-	queries Assignments, opts ...IndexOpt) (result DocIDList, err error) {
-
+	queries Assignments, opts ...IndexOpt,
+) (result DocIDList, err error) {
 	collector := PickCollector()
 
 	defer PutCollector(collector)
@@ -260,8 +257,8 @@ func (bi *KGroupsBEIndex) Retrieve(
 }
 
 func (bi *KGroupsBEIndex) RetrieveWithCollector(
-	queries Assignments, collector ResultCollector, opts ...IndexOpt) (err error) {
-
+	queries Assignments, collector ResultCollector, opts ...IndexOpt,
+) (err error) {
 	ctx := newRetrieveCtx(queries, opts...)
 	util.PanicIf(ctx.collector != nil, "can't specify collector twice")
 
